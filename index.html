@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Demo AR</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <meta name="theme-color" content="#111827" />
+    <!-- Classic scripts (not modules): MindAR expects AFRAME as a global. -->
+    <script src="vendor/aframe.min.js"></script>
+    <script src="vendor/mindar-image-aframe.prod.js"></script>
+    <script src="vendor/aframe-extras.min.js"></script>
+    <style>
+      /* No background on body: it would paint over MindAR's camera video (z-index: -2). */
+      html, body { margin: 0; height: 100%; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <!--
+      imageTargetSrc: compiled target (.mind). Replace with the image glued to the base of the scenery.
+      filterMinCF / filterBeta: jitter vs. lag trade-off of the pose filter.
+    -->
+    <a-scene
+      mindar-image="imageTargetSrc: targets/raccoon.mind; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 5; warmupTolerance: 5"
+      color-space="sRGB"
+      renderer="colorManagement: true, physicallyCorrectLights"
+      vr-mode-ui="enabled: false"
+      device-orientation-permission-ui="enabled: false"
+    >
+      <a-assets>
+        <a-asset-item id="animModel" src="models/raccoon/scene.gltf"></a-asset-item>
+      </a-assets>
+
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+      <a-entity light="type: ambient; intensity: 0.8"></a-entity>
+      <a-entity light="type: directional; intensity: 0.6" position="0 1 1"></a-entity>
+
+      <!-- Units: target image width = 1. Tune the anchor transform to match the printed scenery. -->
+      <a-entity mindar-image-target="targetIndex: 0">
+        <a-entity id="anchor" position="0 -0.25 0" rotation="0 0 0" scale="0.05 0.05 0.05">
+          <a-gltf-model src="#animModel" animation-mixer="loop: repeat"></a-gltf-model>
+        </a-entity>
+      </a-entity>
+    </a-scene>
+  </body>
+</html>
