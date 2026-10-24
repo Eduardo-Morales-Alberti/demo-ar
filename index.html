@@ -14,15 +14,42 @@
     <style>
       /* No background on body: it would paint over MindAR's camera video (z-index: -2). */
       html, body { margin: 0; height: 100%; overflow: hidden; }
+      #tuning { position: fixed; top: 8px; left: 8px; z-index: 1000; padding: 4px 8px; border-radius: 4px;
+                font: 12px/1.4 monospace; color: #fff; background: rgba(0, 0, 0, 0.6); pointer-events: none; }
+      #controls { position: fixed; left: 50%; bottom: calc(32px + env(safe-area-inset-bottom)); z-index: 1000;
+                  transform: translateX(-50%); display: flex; gap: 12px; }
+      #controls button { padding: 14px 24px; border: 0; border-radius: 999px; white-space: nowrap;
+                         font: 600 17px/1 system-ui, sans-serif; color: #fff; background: rgba(17, 24, 39, 0.85);
+                         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); }
+      #controls button[hidden] { display: none; }
+      /* Icons drawn with CSS: glyphs like U+25B6 render as colour emoji on some phones. */
+      #controls button::before { content: ""; display: inline-block; width: 0.75em; height: 0.75em;
+                                 margin-right: 0.5em; vertical-align: -0.05em; background: currentColor; }
+      #controls button[data-icon="play"]::before { clip-path: polygon(10% 0, 100% 50%, 10% 100%); }
+      #controls button[data-icon="pause"]::before {
+        background: linear-gradient(90deg, currentColor 0 35%, transparent 35% 65%, currentColor 65%); }
+      #controls button[data-icon="stop"]::before { clip-path: inset(6%); }
+      #controls button[data-icon="replay"]::before { border: 0.14em solid currentColor; border-right-color: transparent;
+                                                     border-radius: 50%; background: none; box-sizing: border-box; }
+      #subtitles { position: fixed; left: 50%; bottom: calc(104px + env(safe-area-inset-bottom)); z-index: 1000;
+                   transform: translateX(-50%); width: max-content; max-width: 90vw; text-align: center;
+                   white-space: pre-line; pointer-events: none; }
+      #subtitles[hidden] { display: none; }
+      /* Black box per line (clone repeats the padding on wrapped lines). */
+      #subtitles span { padding: 4px 10px; font: 500 18px/1.7 system-ui, sans-serif;
+                        color: #fff; background: #000; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
     </style>
   </head>
   <body>
     <!--
-      imageTargetSrc: compiled target (.mind). Replace with the image glued to the base of the scenery.
-      filterMinCF / filterBeta: jitter vs. lag trade-off of the pose filter.
+      imageTargetSrc: compiled target (.mind): the marble floor from tools/generate-floor.py (print/floor-print.png).
+      filterMinCF / filterBeta: jitter vs. lag trade-off of the pose filter (MindAR defaults: 0.001 / 1000).
+      Lower minCF = less jitter when still; higher beta = less lag (sliding) when moving.
+      0.0001 / 0.001 chosen after testing on the phone: heavy smoothing looked best for this demo.
+      All of them, plus the camera FOV, can be overridden from the URL; see the script below the scene.
     -->
     <a-scene
-      mindar-image="imageTargetSrc: targets/raccoon.mind; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 5; warmupTolerance: 5"
+      mindar-image="imageTargetSrc: targets/floor.mind; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 5; warmupTolerance: 5"
       color-space="sRGB"
       renderer="colorManagement: true, physicallyCorrectLights"
       vr-mode-ui="enabled: false"
@@ -42,12 +69,151 @@
         Units: target image width = 1. Tune the anchor transform to match the printed scenery.
         The image lies flat on the base, so rotate X 90 to stand the model up out of the image plane.
       -->
-      <a-entity mindar-image-target="targetIndex: 0">
-        <a-entity id="anchor" position="0 0 0" rotation="90 0 0" scale="0.004 0.004 0.004">
+      <a-entity id="target" mindar-image-target="targetIndex: 0">
+        <!-- Hidden until the narration starts (see the narration script). -->
+        <a-entity id="anchor" position="0 0 0" rotation="90 0 0" scale="0.004 0.004 0.004" visible="false">
           <!-- Clips: Survey, Walk, Run. Y 90 makes the fox run sideways across the image. -->
           <a-gltf-model src="#animModel" rotation="0 90 0" animation-mixer="clip: Run; loop: repeat"></a-gltf-model>
         </a-entity>
       </a-entity>
     </a-scene>
+
+    <!-- "La zorra y las uvas", Las Fábulas de Esopo vol. 1, read by paulino for LibriVox (public domain). -->
+    <audio id="narration" src="audio/zorra-y-uvas.mp3" preload="auto">
+      <track kind="subtitles" src="audio/zorra-y-uvas.vtt" srclang="es" label="Español" default />
+    </audio>
+    <div id="subtitles" hidden><span></span></div>
+    <div id="controls">
+      <button id="play" type="button" data-icon="play" hidden>Reproducir narración</button>
+      <button id="pause" type="button" data-icon="pause" hidden>Pausa</button>
+      <button id="stop" type="button" data-icon="stop" hidden>Detener</button>
+    </div>
+
+    <script>
+      // Narration. States: idle (nothing started), playing, paused, ended.
+      // - idle/ended: "Reproducir"/"Repetir" shows while the floor is detected. Pressing it (a user gesture,
+      //   which mobile browsers require to play audio) shows the fox running and plays the narration.
+      // - playing/paused: Pause/Continue and Stop show even if the floor is lost, since the audio keeps going.
+      //   Pause also freezes the fox; Stop rewinds and hides it, back to idle.
+      // - ended: the fox idles (Survey) and the start button offers a replay.
+      // Subtitles come from the <track> (WebVTT); the browser picks the active cue from the audio time and
+      // we draw it ourselves (track mode "hidden") so it looks the same everywhere.
+      (() => {
+        if (new URLSearchParams(location.search).has('debug')) return;
+        const target = document.querySelector('#target');
+        const anchor = document.querySelector('#anchor');
+        const model = anchor.querySelector('a-gltf-model');
+        const audio = document.querySelector('#narration');
+        const playButton = document.querySelector('#play');
+        const pauseButton = document.querySelector('#pause');
+        const stopButton = document.querySelector('#stop');
+        const subtitles = document.querySelector('#subtitles');
+        const track = audio.querySelector('track').track;
+        let visible = false;
+        let state = 'idle';
+
+        const showSubtitle = () => {
+          const cue = track.activeCues?.[0];
+          const active = state === 'playing' || state === 'paused';
+          subtitles.hidden = !(cue && active);
+          subtitles.firstElementChild.textContent = cue ? cue.text : '';
+        };
+        track.mode = 'hidden';
+        track.addEventListener('cuechange', showSubtitle);
+
+        const setState = (next) => {
+          state = next;
+          showSubtitle();
+          const active = state === 'playing' || state === 'paused';
+          playButton.hidden = active || !visible;
+          playButton.dataset.icon = state === 'ended' ? 'replay' : 'play';
+          playButton.textContent = state === 'ended' ? 'Repetir narración' : 'Reproducir narración';
+          pauseButton.hidden = stopButton.hidden = !active;
+          pauseButton.dataset.icon = state === 'paused' ? 'play' : 'pause';
+          pauseButton.textContent = state === 'paused' ? 'Continuar' : 'Pausa';
+          model.setAttribute('animation-mixer', 'timeScale', state === 'paused' ? 0 : 1);
+        };
+        target.addEventListener('targetFound', () => { visible = true; setState(state); });
+        target.addEventListener('targetLost', () => { visible = false; setState(state); });
+
+        playButton.addEventListener('click', () => {
+          anchor.setAttribute('visible', true);
+          model.setAttribute('animation-mixer', 'clip', 'Run');
+          audio.currentTime = 0;
+          audio.play();
+          setState('playing');
+        });
+        pauseButton.addEventListener('click', () => {
+          if (state === 'paused') {
+            audio.play();
+            setState('playing');
+          } else {
+            audio.pause();
+            setState('paused');
+          }
+        });
+        stopButton.addEventListener('click', () => {
+          audio.pause();
+          audio.currentTime = 0;
+          anchor.setAttribute('visible', false);
+          setState('idle');
+        });
+        audio.addEventListener('ended', () => {
+          model.setAttribute('animation-mixer', 'clip', 'Survey');
+          setState('ended');
+        });
+      })();
+    </script>
+
+    <script>
+      // Tuning from the URL, e.g. ?beta=10&mincf=0.001&fov=60&debug
+      //   mincf, beta: pose filter (see a-scene comment).
+      //   fov: vertical FOV in degrees MindAR assumes for the camera (library default 45; patched in
+      //        vendor/mindar-image-aframe.prod.js to read window.MINDAR_FOVY). A wrong value makes
+      //        anything standing out of the image plane lean and slide when the viewing angle changes.
+      //   debug: replaces the model with a wireframe cube of side `cube` (image widths, default 0.2)
+      //          standing on the image centre. Put a real box of the same size there and tune `fov`
+      //          until both match from every angle.
+      // Runs before MindAR initialises: A-Frame sets up scene components asynchronously.
+      (() => {
+        const params = new URLSearchParams(location.search);
+        const scene = document.querySelector('a-scene');
+        const shown = [];
+        // The component is not initialised yet, so A-Frame's getAttribute() returns undefined:
+        // read and parse the raw HTML attribute instead.
+        const raw = HTMLElement.prototype.getAttribute.call(scene, 'mindar-image');
+        const mindar = AFRAME.utils.styleParser.parse(raw);
+        const filter = { mincf: 'filterMinCF', beta: 'filterBeta' };
+        for (const [param, prop] of Object.entries(filter)) {
+          const value = parseFloat(params.get(param));
+          if (!Number.isNaN(value)) mindar[prop] = value;
+          shown.push(`${param}=${mindar[prop]}`);
+        }
+        scene.setAttribute('mindar-image', mindar);
+        const fov = parseFloat(params.get('fov'));
+        if (!Number.isNaN(fov)) window.MINDAR_FOVY = fov;
+        shown.push(`fov=${window.MINDAR_FOVY || 45}`);
+
+        if (params.has('debug')) {
+          const size = parseFloat(params.get('cube')) || 0.2;
+          document.querySelector('#anchor').setAttribute('visible', false);
+          const cube = document.createElement('a-box');
+          cube.setAttribute('width', size);
+          cube.setAttribute('height', size);
+          cube.setAttribute('depth', size);
+          cube.setAttribute('position', `0 0 ${size / 2}`);
+          cube.setAttribute('material', 'color: #38bdf8; wireframe: true; shader: flat');
+          document.querySelector('[mindar-image-target]').appendChild(cube);
+          shown.push(`cube=${size}`);
+        }
+
+        if (params.size) {
+          const label = document.createElement('div');
+          label.id = 'tuning';
+          label.textContent = shown.join('  ');
+          document.body.appendChild(label);
+        }
+      })();
+    </script>
   </body>
 </html>

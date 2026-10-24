@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Target check</title>
+    <!-- Dev tool: serve the project root (python3 -m http.server) and open /tools/target-check.html
+         ?img=<png to compile>  or  ?mind=<compiled .mind>&tex=<its png>
+         Renders the target as a phone would see it on the floor (tilt, distance, occlusion by the
+         scenery, low light) and reports how often MindAR detects it and keeps tracking it. -->
+    <script src="../public/vendor/aframe.min.js"></script>
+    <script src="../public/vendor/mindar-image-aframe.prod.js"></script>
+    <style>
+      body { font: 13px/1.4 monospace; margin: 16px; }
+      td, th { padding: 2px 8px; text-align: right; }
+      canvas { border: 1px solid #ccc; margin: 4px; width: 320px; }
+    </style>
+  </head>
+  <body>
+    <div id="status">loading…</div>
+    <table id="summary"></table>
+    <div id="frames"></div>
+    <script>
+      const W = 640, H = 480, FOV = 45; // FOV matches MindAR's assumed vertical FOV
+      const TILTS = [0, 30, 45, 55, 65, 75];
+      const DISTANCES = [1.5, 2.5, 4]; // in target widths
+      const params = new URLSearchParams(location.search);
+      const status = (t) => (document.querySelector('#status').textContent = t);
+
+      const loadImage = (src) => new Promise((ok, ko) => {
+        const img = new Image();
+        img.onload = () => ok(img);
+        img.onerror = ko;
+        img.src = src;
+      });
+
+      async function getTarget() {
+        if (params.get('img')) {
+          const img = await loadImage(params.get('img'));
+          const compiler = new MINDAR.IMAGE.Compiler();
+          await compiler.compileImageTargets([img], (p) => status(`compiling ${p.toFixed(0)}%`));
+          return { buffer: compiler.exportData(), img };
+        }
+        const buffer = await (await fetch(params.get('mind'))).arrayBuffer();
+        return { buffer, img: await loadImage(params.get('tex')) };
+      }
+
+      function makeScene(img) {
+        const THREE = AFRAME.THREE;
+        const renderer = new THREE.WebGLRenderer({ preserveDrawingBuffer: true });
+        renderer.setSize(W, H);
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x777777);
+        const camera = new THREE.PerspectiveCamera(FOV, W / H, 0.01, 100);
+        const tex = new THREE.Texture(img);
+        tex.needsUpdate = true;
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        const aspect = img.height / img.width;
+        const mat = new THREE.MeshBasicMaterial({ map: tex });
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(1, aspect), mat);
+        scene.add(plane);
+        // The printed scenery standing on the centre of the target.
+        const box = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 0.25), new THREE.MeshBasicMaterial({ color: 0x8a8580 }));
+        box.position.z = 0.125;
+        plane.add(box);
+        const out = document.createElement('canvas');
+        out.width = W;
+        out.height = H;
+        const ctx = out.getContext('2d', { willReadFrequently: true });
+        return (view) => {
+          plane.position.set(view.dx || 0, 0, -view.d);
+          plane.rotation.set(-THREE.MathUtils.degToRad(view.tilt), 0, 0);
+          box.visible = !!view.occluded;
+          mat.color.setScalar(view.dark ? 0.35 : 1);
+          renderer.render(scene, camera);
+          ctx.drawImage(renderer.domElement, 0, 0);
+          if (view.dark) {
+            // Sensor noise of a phone camera in a dim church.
+            const data = ctx.getImageData(0, 0, W, H);
+            for (let i = 0; i < data.data.length; i += 4) {
+              const n = (Math.random() - 0.5) * 24;
+              data.data[i] += n; data.data[i + 1] += n; data.data[i + 2] += n;
+            }
+            ctx.putImageData(data, 0, 0);
+          }
+          return out;
+        };
+      }
+
+      async function run() {
+        const { buffer, img } = await getTarget();
+        const controller = new MINDAR.IMAGE.Controller({ inputWidth: W, inputHeight: H, maxTrack: 1 });
+        const { matchingDataList, trackingDataList } = controller.addImageTargetsFromBuffer(buffer);
+        const matchingPoints = matchingDataList[0].reduce((n, s) => n + s.maximaPoints.length + s.minimaPoints.length, 0);
+        const trackingPoints = trackingDataList[0].reduce((n, s) => n + s.points.length, 0);
+        await controller.dummyRun(document.createElement('canvas'));
+        const render = makeScene(img);
+
+        const results = [];
+        for (const dark of [false, true]) {
+          for (const occluded of [false, true]) {
+            for (const tilt of TILTS) {
+              for (const d of DISTANCES) {
+                status(`dark=${dark} occluded=${occluded} tilt=${tilt} d=${d}`);
+                const view = { tilt, d, occluded, dark };
+                const { featurePoints } = await controller.detect(render(view));
+                const { modelViewTransform } = await controller.match(featurePoints, 0);
+                let tracked = false;
+                if (modelViewTransform) {
+                  // Next frame: the phone moved a little. Tracking must follow from the detected pose.
+                  const next = render({ ...view, tilt: tilt + 2, dx: 0.02 });
+                  const trackResult = await controller.track(next, modelViewTransform, 0);
+                  tracked = !!(await controller.trackUpdate(modelViewTransform, trackResult));
+                }
+                results.push({ dark, occluded, tilt, d, detected: !!modelViewTransform, tracked });
+              }
+            }
+          }
+        }
+
+        const rate = (rows, key) => Math.round((100 * rows.filter((r) => r[key]).length) / rows.length);
+        const groups = {};
+        for (const r of results) (groups[`${r.dark ? 'dark' : 'light'} ${r.occluded ? 'occluded' : 'clear'} tilt ${r.tilt}`] ||= []).push(r);
+        const summary = Object.entries(groups).map(([k, rows]) => ({ group: k, detected: rate(rows, 'detected'), tracked: rate(rows, 'tracked') }));
+        window.RESULT = {
+          matchingPoints, trackingPoints,
+          detected: rate(results, 'detected'), tracked: rate(results, 'tracked'),
+          summary,
+        };
+        document.querySelector('#summary').innerHTML =
+          `<tr><th>group</th><th>detected %</th><th>tracked %</th></tr>` +
+          summary.map((s) => `<tr><td>${s.group}</td><td>${s.detected}</td><td>${s.tracked}</td></tr>`).join('');
+        for (const v of [{ tilt: 55, d: 2.5, occluded: true }, { tilt: 65, d: 2.5, occluded: true, dark: true }]) {
+          const c = document.createElement('canvas');
+          c.width = W; c.height = H;
+          c.getContext('2d').drawImage(render(v), 0, 0);
+          document.querySelector('#frames').appendChild(c);
+        }
+        status(`done: matching points ${matchingPoints}, tracking points ${trackingPoints}, detected ${window.RESULT.detected}%, tracked ${window.RESULT.tracked}%`);
+      }
+      run().catch((e) => { status('error: ' + e); window.RESULT = { error: String(e) }; });
+    </script>
+  </body>
+</html>

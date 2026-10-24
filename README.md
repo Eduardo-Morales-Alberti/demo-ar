@@ -1,6 +1,6 @@
 # Demo AR
 
-Animación AR anclada a una imagen impresa en la base de un escenario 3D.
+Animación AR anclada a un suelo de baldosas de mármol impreso (pensado para el suelo de una iglesia).
 Stack: A-Frame 1.5 + MindAR 1.2.5 (image tracking) + aframe-extras + Vite. APK Android con Capacitor 6.
 
 Las librerías están en `public/vendor/` para que el APK funcione sin conexión.
@@ -9,7 +9,11 @@ Las librerías están en `public/vendor/` para que el APK funcione sin conexión
 
 - Modelo `public/models/fox/fox.glb`: *Fox*, de [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Fox).
   Modelo de PixelMannen (CC0), rigging y animación de tomkranis (CC-BY 4.0), conversión a glTF de @AsoboStudio y @scurest (CC-BY 4.0).
-- Imagen de referencia `public/targets/raccoon.*`: ejemplos de [MindAR](https://github.com/hiukim/mind-ar-js) (MIT).
+- Imagen de referencia `public/targets/floor.*`: generada con `tools/generate-floor.py` (propia).
+- Narración `public/audio/zorra-y-uvas.mp3`: "La zorra y las uvas", *Las Fábulas de Esopo, vol. 1*, leída por
+  paulino para [LibriVox](https://librivox.org/las-fabulas-de-esopo-vol-01) (dominio público en EE. UU.;
+  también en [Project Gutenberg #21143](https://www.gutenberg.org/ebooks/21143)). Recortada del segundo 16 al 43
+  (sin la presentación de LibriVox) y recodificada a mono 64 kbps.
 
 ## Desarrollo
 
@@ -18,15 +22,84 @@ npm install
 npm run dev   # HTTPS en la LAN (certificado autofirmado): abrir https://<ip>:5173 en Chrome Android
 ```
 
-Prueba rápida: apunta el móvil a `public/targets/raccoon.png` (en pantalla o impreso, mejor en horizontal sobre la mesa).
+Prueba rápida: apunta el móvil a `public/targets/floor.png` (en pantalla o impreso, mejor en horizontal sobre la mesa).
+
+## Narración
+
+Al detectar el suelo aparece el botón *Reproducir narración*. Al pulsarlo aparece el zorro corriendo y suena
+`public/audio/zorra-y-uvas.mp3`. Mientras suena hay dos botones: *Pausa/Continuar* (también congela al zorro)
+y *Detener* (vuelve al principio y oculta al zorro). Si se pierde el suelo, el audio y los botones siguen.
+Al acabar, el zorro pasa a la animación `Survey` y el botón ofrece repetir. El botón es necesario: los navegadores móviles solo reproducen audio tras
+un toque del usuario. Para cambiar la narración basta con sustituir el MP3 (o el `src` de `<audio id="narration">`).
+
+Subtítulos: `public/audio/zorra-y-uvas.vtt` (WebVTT, texto plano). Cada bloque es `inicio --> fin` en
+`minutos:segundos.milésimas` y debajo el texto (un salto de línea dentro del bloque se respeta en pantalla).
+Se muestran en blanco sobre negro encima de los botones, siguen visibles en pausa y desaparecen al detener.
+Para ajustar un desfase basta con editar los tiempos; para localizar las pausas de la voz:
+
+```bash
+ffmpeg -i public/audio/zorra-y-uvas.mp3 -af silencedetect=noise=-35dB:d=0.25 -f null - 2>&1 | grep silence_
+```
+
+## Suelo de referencia
+
+`print/floor-print.png` (4096 px) es la imagen que se imprime; `public/targets/floor.png` (1024 px) y
+`floor.mind` son la misma imagen reducida y compilada. Es un damero diagonal de mármol con cada baldosa
+distinta (veta, tono, desgaste, grietas): un damero regular confunde al seguimiento porque todas las
+esquinas son iguales.
+
+Impresión:
+- Tamaño: cuanto más grande, mejor se detecta de lejos y en ángulo. Recomendado 1 × 1 m (4 baldosas de
+  unos 25 cm de diagonal por lado); con 4096 px da unos 100 ppp, suficiente para verlo de pie.
+- Material: vinilo de suelo **mate** (laminado antideslizante). El brillo refleja las lámparas y rompe el seguimiento.
+- Con el escenario encima tapando el centro sigue funcionando: los bordes tienen detalle de sobra.
+- Escala del modelo: 1 unidad = ancho impreso. Con 1 m, el zorro (`scale 0.004`) mide unos 60 cm.
+
+Límites medidos con `tools/target-check.html` (simulación con poca luz y el centro tapado):
+detecta y sigue bien hasta unos 55° de inclinación respecto a la vertical; por encima de 65° no
+funciona ninguna imagen con MindAR. Con el móvil a la altura del pecho, conviene estar a menos de
+1–1,5 m del borde del suelo impreso.
+
+Regenerar (otros colores, tamaño o número de baldosas):
+
+```bash
+python3 tools/generate-floor.py tools/out/nuevo --size 4096 --tiles 4 --vein-power 1.2 3 --cloud 0.5 --grout-contrast 0.15 --seed 21
+python3 -m http.server 8099   # y abrir http://localhost:8099/tools/target-check.html?img=out/nuevo/floor.png
+```
+
+`target-check.html` compila la imagen, la prueba con varias inclinaciones, distancias, poca luz y el
+centro tapado, y da el porcentaje de detección y seguimiento (referencia: el suelo actual da ~58 %,
+la imagen de ejemplo de MindAR ~56 %). Para obtener el `.mind`, usar el compilador web de MindAR
+(https://hiukim.github.io/mind-ar-js-doc/tools/compile) con `floor.png`.
 
 ## Usar nuestro escenario
 
-1. Imagen para la base: con mucho detalle, alto contraste y sin patrones repetidos.
+1. Con otra imagen de referencia: mucho detalle, alto contraste y sin patrones repetidos.
 2. Compilarla en https://hiukim.github.io/mind-ar-js-doc/tools/compile y guardar el `.mind` en `public/targets/`.
 3. En `index.html`: cambiar `imageTargetSrc`, el modelo en `<a-assets>` y el transform de `#anchor`
    (el ancho de la imagen equivale a 1 unidad; Y hacia arriba en la imagen, Z hacia fuera de ella).
 4. Si tiembla, ajustar `filterMinCF` / `filterBeta` en `mindar-image`.
+
+## Ajuste de estabilidad (desde la URL)
+
+Sin volver a desplegar, se pueden probar valores añadiendo parámetros a la URL, por ejemplo
+`https://<url>/?beta=10&fov=60`. Si hay parámetros, arriba a la izquierda se muestran los valores activos.
+
+| Parámetro | Qué hace | Por defecto |
+|---|---|---|
+| `mincf` | Suavizado en reposo: más bajo = tiembla menos, pero más retraso | 0.0001 (MindAR: 0.001) |
+| `beta` | Reacción al movimiento: más alto = menos retraso (menos "patineo") | 0.001 (MindAR: 1000) |
+| `fov` | Campo de visión vertical (grados) que MindAR supone para la cámara | 45 |
+| `debug` | Sustituye el modelo por un cubo de alambre de lado `cube` (en anchos de imagen) | |
+| `cube` | Lado del cubo en modo `debug` | 0.2 |
+
+Calibrar `fov`: coloca en el centro de la imagen una caja real que mida 0.2 veces el ancho de la imagen
+(p. ej. 4 cm si la imagen mide 20 cm), abre `?debug` y cambia `fov` (50, 55, 60, 65...) hasta que el cubo
+coincida con la caja real desde todos los ángulos. Después fija los valores en `index.html`
+(`mindar-image` en `<a-scene>` y el valor por defecto de `fov` en el script).
+
+`public/vendor/mindar-image-aframe.prod.js` lleva un parche: MindAR fija el campo de visión a 45°
+y se ha cambiado por `window.MINDAR_FOVY || 45`. Si se actualiza la librería, hay que volver a aplicarlo.
 
 ## Publicación en GitHub Pages
 
