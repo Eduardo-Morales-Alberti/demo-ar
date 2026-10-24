@@ -5,6 +5,12 @@ Stack: A-Frame 1.5 + MindAR 1.2.5 (image tracking) + aframe-extras + Vite. APK A
 
 Las librerías están en `public/vendor/` para que el APK funcione sin conexión.
 
+## Créditos
+
+- Modelo `public/models/fox/fox.glb`: *Fox*, de [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Fox).
+  Modelo de PixelMannen (CC0), rigging y animación de tomkranis (CC-BY 4.0), conversión a glTF de @AsoboStudio y @scurest (CC-BY 4.0).
+- Imagen de referencia `public/targets/raccoon.*`: ejemplos de [MindAR](https://github.com/hiukim/mind-ar-js) (MIT).
+
 ## Desarrollo
 
 ```bash
@@ -12,7 +18,7 @@ npm install
 npm run dev   # HTTPS en la LAN (certificado autofirmado): abrir https://<ip>:5173 en Chrome Android
 ```
 
-Prueba rápida: apunta el móvil a `public/targets/raccoon.png` (en pantalla o impreso).
+Prueba rápida: apunta el móvil a `public/targets/raccoon.png` (en pantalla o impreso, mejor en horizontal sobre la mesa).
 
 ## Usar nuestro escenario
 

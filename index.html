@@ -29,7 +29,8 @@
       device-orientation-permission-ui="enabled: false"
     >
       <a-assets>
-        <a-asset-item id="animModel" src="models/raccoon/scene.gltf"></a-asset-item>
+        <!-- Fox: Khronos glTF Sample Assets (CC0 model by PixelMannen, CC-BY 4.0 rig/animation by tomkranis). -->
+        <a-asset-item id="animModel" src="models/fox/fox.glb"></a-asset-item>
       </a-assets>
 
       <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
@@ -37,10 +38,14 @@
       <a-entity light="type: ambient; intensity: 0.8"></a-entity>
       <a-entity light="type: directional; intensity: 0.6" position="0 1 1"></a-entity>
 
-      <!-- Units: target image width = 1. Tune the anchor transform to match the printed scenery. -->
+      <!--
+        Units: target image width = 1. Tune the anchor transform to match the printed scenery.
+        The image lies flat on the base, so rotate X 90 to stand the model up out of the image plane.
+      -->
       <a-entity mindar-image-target="targetIndex: 0">
-        <a-entity id="anchor" position="0 -0.25 0" rotation="0 0 0" scale="0.05 0.05 0.05">
-          <a-gltf-model src="#animModel" animation-mixer="loop: repeat"></a-gltf-model>
+        <a-entity id="anchor" position="0 0 0" rotation="90 0 0" scale="0.004 0.004 0.004">
+          <!-- Clips: Survey, Walk, Run. Y 90 makes the fox run sideways across the image. -->
+          <a-gltf-model src="#animModel" rotation="0 90 0" animation-mixer="clip: Run; loop: repeat"></a-gltf-model>
         </a-entity>
       </a-entity>
     </a-scene>
